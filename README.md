@@ -31,10 +31,15 @@ for TTS and `arecord` for capture; Windows would need its own equivalents).
 
 ## Install
 
-### From a local checkout
+### From GitHub (recommended for end users)
 
 ```bash
-# User-wide (all projects)
+pi install git:github.com/jordilopez/pi-voice
+```
+
+### From a local checkout (for development)
+
+```bash
 pi install /absolute/path/to/pi-voice
 
 # Or project-local only
@@ -50,10 +55,11 @@ pi list
 Remove later with:
 
 ```bash
-pi remove ../../development/pi-voice   # match the path shown by `pi list`
+pi remove git:github.com/jordilopez/pi-voice                 # remote install
+pi remove ../../development/pi-voice                          # local install
 ```
 
-### During development
+### During development (no settings change)
 
 Use `-e` for a one-shot load without touching settings, and `/reload` inside a
 session to pick up edits without restarting pi:
