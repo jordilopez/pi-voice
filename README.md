@@ -58,6 +58,10 @@ pi -e ./src/index.ts
 | `/voice-stop` | Stop speech and cancel an in-progress recording. |
 | `/voice-config` | Feedback mode, TTS voice, send catchphrase, summary model, STT backend. |
 
+### Spoken cues
+- **Turn finished:** a short model-generated headline of the outcome, e.g. *"voice feedback now working"*.
+- **`ask_user` prompt raised:** says *"I've got a question about <topic>"*, where `<topic>` is a 2–6-word phrase condensed from the actual question. The announcement runs asynchronously so the prompt isn't blocked by the model call.
+
 ### Send catchphrase
 By default the trigger word is **"copy"**. Say your phrase and finish with it:
 > "run the test suite for me, *copy*" → sent immediately as: *run the test suite for me*
@@ -68,11 +72,13 @@ The word only fires when it's the **last word** (so "I am copying the file" is s
 
 ```
 src/index.ts   extension entry: events, shortcut, commands
-src/tts.ts     macOS `say` speech synthesis (markdown stripped, cancellable)
+src/tts.ts     macOS `say` speech synthesis (cancellable)
 src/stt.ts     ffmpeg AVFoundation capture + pluggable transcription
+src/text.ts    pure text helpers (phrase truncation, catchphrase, sanitize)
 ```
 
-- Outbound: `agent_end` → in `cue` mode the model condenses the reply into one attention phrase (falls back to the first sentence if the model call is unavailable); short replies are spoken as-is; `full` mode speaks the truncated text.
+- Outbound: `agent_settled` (not `agent_end`, which can fire more than once per turn) → in `cue` mode the model condenses the reply into one attention phrase (falls back to a few words if the model call is unavailable); short replies are spoken as-is; `full` mode speaks the truncated text.
+- Questions: a `tool_call` for `ask_user` announces *"I've got a question about <topic>"* asynchronously.
 - Inbound: `Key.ctrlShift("v")` toggles a spawned `ffmpeg` recording; on stop it transcribes via whisper.cpp. If the transcript ends with `dictation.catchphrase` (default "copy"), the word is stripped and `pi.sendUserMessage()` sends it to the model; otherwise `ctx.ui.setEditorText()` drops it in the editor.
 
 ## Configuration
