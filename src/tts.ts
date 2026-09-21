@@ -1,6 +1,8 @@
 // Text-to-speech via macOS `say`.
 // Fire-and-forget: does not block the agent event loop.
 
+import { sanitize } from "./text.js";
+
 export type Voice = string;
 
 /**
@@ -64,18 +66,4 @@ export function stopSpeaking(): void {
     currentProcess.kill("SIGTERM");
     currentProcess = null;
   }
-}
-
-/** Strip markdown/code noise so speech is not full of backticks and URLs. */
-function sanitize(text: string): string {
-  return text
-    .replace(/```[\s\S]*?```/g, " code block ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1") // markdown links -> label
-    .replace(/https?:\/\/\S+/g, "link")
-    .replace(/^[\s]*[-*+]\s+/gm, "") // list bullets
-    .replace(/^[\s]*\d+\.\s+/gm, "") // numbered lists
-    .replace(/[*_#>~]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
 }

@@ -11,6 +11,7 @@ import {
   speak,
   stopSpeaking,
 } from "./tts.js";
+import { shortPhrase, stripCatchphrase, topicFallback } from "./text.js";
 import {
   cancelRecording,
   DEFAULT_RECORDER,
@@ -61,24 +62,6 @@ async function saveConfig(): Promise<void> {
   }
 }
 
-/** Returns { matched, phrase }. `phrase` is the text to send if matched. */
-function stripCatchphrase(text: string): { matched: boolean; phrase: string } {
-  const raw = (text ?? "").trim();
-  const cp = dictation.catchphrase.trim().toLowerCase();
-  if (!cp) return { matched: false, phrase: raw };
-
-  const core = raw.replace(/[.!?\s]+$/g, ""); // drop trailing punctuation/space
-  const low = core.toLowerCase();
-  if (low === cp) return { matched: true, phrase: "" }; // said only the trigger
-  const before = low.slice(0, Math.max(0, low.length - cp.length));
-  // require the trigger to be its own trailing word (preceded by space/punct)
-  if (low.endsWith(cp) && /(^|[\s,;:])$/.test(before)) {
-    const phrase = core.slice(0, core.length - cp.length).replace(/[\s,;:.!?]+$/g, "").trim();
-    return { matched: true, phrase };
-  }
-  return { matched: false, phrase: raw };
-}
-
 /** Extract the last assistant text from session entries. */
 function lastAssistantText(entries: any[] | undefined): string {
   if (!entries) return "";
@@ -111,34 +94,23 @@ function pickSummaryModel(ctx: ExtensionContext) {
   return ctx.model ?? null;
 }
 
-/** Trim to at most `maxWords` words at a word boundary. */
-function shortPhrase(text: string, maxWords = 5): string {
-  const plain = text.replace(/\s+/g, " ").trim();
-  const words = plain.split(" ");
-  if (words.length <= maxWords) return plain;
-  return words.slice(0, maxWords).join(" ");
-}
 
 /**
- * Condense the assistant's reply into ONE short spoken phrase that summarizes
- * the outcome. Returns null on any failure so the caller can fall back.
+ * Ask the model to condense `text` into a short spoken phrase using the given
+ * instruction. Returns null on any failure so the caller can fall back.
  */
-async function summarizeToPhrase(ctx: ExtensionContext, text: string): Promise<string | null> {
+async function condenseToPhrase(
+  ctx: ExtensionContext,
+  text: string,
+  instruction: string,
+  maxWords = 5,
+): Promise<string | null> {
   const model = pickSummaryModel(ctx);
   if (!model) return null;
   if (ctx.modelRegistry.hasConfiguredAuth && !ctx.modelRegistry.hasConfiguredAuth(model)) {
     return null;
   }
-  const prompt = [
-    "Condense the assistant's reply below into a HEADLINE of 3 to 5 words max.",
-    "It should convey the outcome so the user notices when they look back.",
-    "No quotes, no ending punctuation, no articles (a/an/the).",
-    "Output ONLY the words — nothing else.",
-    "",
-    "<reply>",
-    text.slice(0, 4000),
-    "</reply>",
-  ].join("\n");
+  const prompt = [instruction, "Output ONLY the words — nothing else.", "", "<text>", text.slice(0, 4000), "</text>"].join("\n");
   const messages = [
     { role: "user" as const, content: [{ type: "text" as const, text: prompt }], timestamp: Date.now() },
   ];
@@ -152,7 +124,51 @@ async function summarizeToPhrase(ctx: ExtensionContext, text: string): Promise<s
     .join(" ")
     .replace(/^[\s"']+|[\s"']+\.?$/g, "")
     .trim();
-  return phrase ? shortPhrase(phrase, 5) : null;
+  return phrase ? shortPhrase(phrase, maxWords) : null;
+}
+
+/** Condense the assistant's reply into a 3–5 word outcome headline. */
+function summarizeToPhrase(ctx: ExtensionContext, text: string): Promise<string | null> {
+  return condenseToPhrase(
+    ctx,
+    text,
+    [
+      "Condense the assistant's reply below into a HEADLINE of 3 to 5 words max.",
+      "It should convey the outcome so the user notices when they look back.",
+      "No quotes, no ending punctuation, no articles (a/an/the).",
+    ].join("\n"),
+    5,
+  );
+}
+
+/** Condense a question into a 2–6 word topic phrase (for "a question about X"). */
+function summarizeQuestion(ctx: ExtensionContext, text: string): Promise<string | null> {
+  return condenseToPhrase(
+    ctx,
+    text,
+    [
+      "Condense the question below into a short TOPIC phrase of 2 to 6 words.",
+      "It completes the sentence \"I've got a question about ...\".",
+      "Write it as a noun topic, not a question — no leading 'should I', 'how do I', or 'what'.",
+      "No quotes, no question mark, no ending punctuation, no articles (a/an/the).",
+    ].join("\n"),
+    6,
+  );
+}
+
+/**
+ * Speak "I've got a question about <topic>" for an `ask_user` prompt.
+ * Falls back to the raw question's first few words, then to the bare phrase.
+ */
+async function announceQuestion(ctx: ExtensionContext, question: string): Promise<void> {
+  let topic = question ? topicFallback(question) : "";
+  if (question) {
+    topic = (await summarizeQuestion(ctx, question).catch(() => null)) ?? topic;
+  }
+  const text = topic ? `I've got a question about ${topic}` : "I've got a question";
+  await speak(text, speaker, { force: true, maxChars: 100 }).catch((err) =>
+    ctx.ui?.notify?.(`voice TTS failed: ${err.message}`, "error"),
+  );
 }
 
 export default function (pi: ExtensionAPI) {
@@ -194,13 +210,14 @@ export default function (pi: ExtensionAPI) {
     stopSpeaking();
   });
 
-  // When the agent asks the user something, announce it immediately.
+  // When the agent asks the user something, announce the topic immediately.
+  // Don't await the model round-trip here: the ask_user prompt should appear
+  // without waiting on summarization. The speech catches up on its own.
   pi.on("tool_call", async (event, ctx) => {
-    if (event.toolName !== "ask_user") return;
-    if (speaker.mode === "off") return;
-    await speak("I've got a question", speaker, { force: true, maxChars: 60 }).catch(
-      (err) => ctx.ui?.notify?.(`voice TTS failed: ${err.message}`, "error"),
-    );
+    if (event.toolName !== "ask_user" || speaker.mode === "off") return;
+    const input = event.input as { question?: unknown } | undefined;
+    const question = typeof input?.question === "string" ? input.question.trim() : "";
+    void announceQuestion(ctx, question);
   });
 
   // ---- INBOUND: push-to-talk dictation -------------------------------------
@@ -248,7 +265,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("No speech detected", "info");
         return;
       }
-      const { matched, phrase } = stripCatchphrase(text);
+      const { matched, phrase } = stripCatchphrase(text, dictation.catchphrase);
       if (matched) {
         if (phrase) {
           // Trigger word present → send straight to the model (no Enter).
