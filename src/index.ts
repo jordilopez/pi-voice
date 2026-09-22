@@ -11,7 +11,7 @@ import {
   speak,
   stopSpeaking,
 } from "./tts.js";
-import { shortPhrase, stripCatchphrase, topicFallback } from "./text.js";
+import { shortPhrase, stripCatchphrase } from "./text.js";
 import {
   cancelRecording,
   DEFAULT_RECORDER,
@@ -26,6 +26,9 @@ import {
 } from "./stt.js";
 
 // ---- in-memory config (toggle with /voice-config) --------------------------
+// Used only when the user has not selected an explicit summary model. If this
+// model is unavailable or unauthenticated, summaries fall back to the active model.
+const DEFAULT_SUMMARY_MODEL = "hyper/glm-5.3-flash";
 const speaker: Speaker = { ...DEFAULT_SPEAKER };
 const recorder: Recorder = { ...DEFAULT_RECORDER };
 const transcriber: Transcriber = { ...DEFAULT_TRANSCRIBER };
@@ -87,9 +90,14 @@ let lastSpoken = "";
 function pickSummaryModel(ctx: ExtensionContext) {
   const reg = ctx?.modelRegistry;
   if (!reg) return null;
-  if (typeof speaker.summaryModel === "string" && speaker.summaryModel.includes("/")) {
-    const [provider, id] = speaker.summaryModel.split("/", 2);
-    return reg.find(provider, id) ?? null;
+  const configured =
+    typeof speaker.summaryModel === "string" && speaker.summaryModel.includes("/")
+      ? speaker.summaryModel
+      : DEFAULT_SUMMARY_MODEL;
+  const [provider, id] = configured.split("/", 2);
+  const preferred = reg.find(provider, id);
+  if (preferred && (!reg.hasConfiguredAuth || reg.hasConfiguredAuth(preferred))) {
+    return preferred;
   }
   return ctx.model ?? null;
 }
@@ -141,32 +149,9 @@ function summarizeToPhrase(ctx: ExtensionContext, text: string): Promise<string 
   );
 }
 
-/** Condense a question into a 2–6 word topic phrase (for "a question about X"). */
-function summarizeQuestion(ctx: ExtensionContext, text: string): Promise<string | null> {
-  return condenseToPhrase(
-    ctx,
-    text,
-    [
-      "Condense the question below into a short TOPIC phrase of 2 to 6 words.",
-      "It completes the sentence \"I've got a question about ...\".",
-      "Write it as a noun topic, not a question — no leading 'should I', 'how do I', or 'what'.",
-      "No quotes, no question mark, no ending punctuation, no articles (a/an/the).",
-    ].join("\n"),
-    6,
-  );
-}
-
-/**
- * Speak "I've got a question about <topic>" for an `ask_user` prompt.
- * Falls back to the raw question's first few words, then to the bare phrase.
- */
-async function announceQuestion(ctx: ExtensionContext, question: string): Promise<void> {
-  let topic = question ? topicFallback(question) : "";
-  if (question) {
-    topic = (await summarizeQuestion(ctx, question).catch(() => null)) ?? topic;
-  }
-  const text = topic ? `I've got a question about ${topic}` : "I've got a question";
-  await speak(text, speaker, { force: true, maxChars: 100 }).catch((err) =>
+/** Speak a fixed cue for an `ask_user` prompt without making another LLM call. */
+async function announceQuestion(ctx: ExtensionContext): Promise<void> {
+  await speak("I've got a question", speaker, { force: true, maxChars: 100 }).catch((err) =>
     ctx.ui?.notify?.(`voice TTS failed: ${err.message}`, "error"),
   );
 }
@@ -215,9 +200,7 @@ export default function (pi: ExtensionAPI) {
   // without waiting on summarization. The speech catches up on its own.
   pi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "ask_user" || speaker.mode === "off") return;
-    const input = event.input as { question?: unknown } | undefined;
-    const question = typeof input?.question === "string" ? input.question.trim() : "";
-    void announceQuestion(ctx, question);
+    void announceQuestion(ctx);
   });
 
   // ---- INBOUND: push-to-talk dictation -------------------------------------

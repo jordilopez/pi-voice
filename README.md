@@ -84,7 +84,7 @@ the extension.
 
 ### Spoken cues
 - **Turn finished:** a short model-generated headline of the outcome, e.g. *"voice feedback now working"*.
-- **`ask_user` prompt raised:** says *"I've got a question about <topic>"*, where `<topic>` is a 2–6-word phrase condensed from the actual question. The announcement runs asynchronously so the prompt isn't blocked by the model call.
+- **`ask_user` prompt raised:** says *"I've got a question"*. This is a fixed cue, so it does not make an additional model call or delay the prompt.
 
 ### Send catchphrase
 By default the trigger word is **"copy"**. Say your phrase and finish with it:
@@ -102,7 +102,7 @@ src/text.ts    pure text helpers (phrase truncation, catchphrase, sanitize)
 ```
 
 - Outbound: `agent_settled` (not `agent_end`, which can fire more than once per turn) → in `cue` mode the model condenses the reply into one attention phrase (falls back to a few words if the model call is unavailable); short replies are spoken as-is; `full` mode speaks the truncated text.
-- Questions: a `tool_call` for `ask_user` announces *"I've got a question about <topic>"* asynchronously.
+- Questions: a `tool_call` for `ask_user` announces the fixed *"I've got a question"* cue asynchronously, without an LLM call.
 - Inbound: `Key.ctrlShift("v")` toggles a spawned `ffmpeg` recording; on stop it transcribes via whisper.cpp. If the transcript ends with `dictation.catchphrase` (default "copy"), the word is stripped and `pi.sendUserMessage()` sends it to the model; otherwise `ctx.ui.setEditorText()` drops it in the editor.
 
 ## Configuration
@@ -114,7 +114,7 @@ Delete the file to reset to defaults.
 Code-level defaults (used on first run, or when the JSON file is absent):
 
 - `speaker.mode` — `"cue"` (one short summary phrase, default), `"full"` (read the answer), or `"off"`.
-- `speaker.summaryModel` — `"provider/model"` to use for the summary (defaults to the active model; point at a cheap/fast model to cut cost/latency).
+- `speaker.summaryModel` — `"provider/model"` to use for the summary (defaults to `hyper/glm-5.3-flash` when available, otherwise the active model; point at another cheap/fast model to change it).
 - `speaker.shortReplyChars` — replies under this length are spoken verbatim (no model call). Default `60`.
 - In `cue` mode the spoken phrase is always hard-capped at **5 words** (the summarizer is instructed to return a 3–5 word headline, and the result is word-truncated as a safety net).
 - `speaker.voice` — any macOS `say` voice (`say -v '?'` to list).
