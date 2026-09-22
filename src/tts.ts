@@ -17,9 +17,9 @@ export interface Speaker {
   mode: FeedbackMode;
   voice: Voice;
   rate: number; // words per minute for `say`
-  /** Optional "provider/model" id to use for summarizing; defaults to the active model. */
-  summaryModel?: string;
-  /** If a reply is shorter than this many chars, speak it directly without summarizing. */
+  /** Predefined phrases spoken (randomly) when a long reply finishes. */
+  cues: string[];
+  /** If a reply is shorter than this many chars, speak it directly without a cue. */
   shortReplyChars: number;
 }
 
@@ -27,6 +27,18 @@ export const DEFAULT_SPEAKER: Speaker = {
   mode: "cue",
   voice: "Samantha",
   rate: 190,
+  cues: [
+    "job done",
+    "waiting for your orders",
+    "that's a wrap",
+    "all sorted",
+    "tasks slain",
+    "back to you",
+    "mic drop",
+    "over to you",
+    "at your service",
+    "nothing more from me",
+  ],
   shortReplyChars: 60,
 };
 
