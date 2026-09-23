@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 
-import { sanitize, shortPhrase, stripCatchphrase, topicFallback } from "./text.ts";
+import { QUESTION_CUES, OUTCOME_CUES, sanitize, stripCatchphrase, pickFromPool, pickOutcomeCue, pickQuestionCue } from "./text.ts";
 
 describe("stripCatchphrase", () => {
   it("matches trailing catchphrase after a comma", () => {
@@ -47,28 +47,6 @@ describe("stripCatchphrase", () => {
   });
 });
 
-describe("shortPhrase", () => {
-  it("returns text unchanged when under the limit", () => {
-    assert.strictEqual(shortPhrase("one two three"), "one two three");
-  });
-
-  it("truncates to maxWords at a word boundary", () => {
-    assert.strictEqual(shortPhrase("one two three four five six seven"), "one two three four five");
-  });
-
-  it("honours a custom maxWords", () => {
-    assert.strictEqual(shortPhrase("one two three four five", 3), "one two three");
-  });
-
-  it("normalizes whitespace", () => {
-    assert.strictEqual(shortPhrase("one   two    three"), "one two three");
-  });
-
-  it("handles empty input", () => {
-    assert.strictEqual(shortPhrase(""), "");
-  });
-});
-
 describe("sanitize", () => {
   it("strips code blocks", () => {
     assert.strictEqual(sanitize("before ```code``` after"), "before code block after");
@@ -100,29 +78,114 @@ describe("sanitize", () => {
   });
 });
 
-describe("topicFallback", () => {
-  it("strips a leading 'should I'", () => {
-    assert.strictEqual(topicFallback("Should I use Postgres or MySQL?"), "use Postgres or MySQL");
+describe("QUESTION_CUES", () => {
+  it("contains 7 phrases", () => {
+    assert.strictEqual(QUESTION_CUES.length, 7);
   });
 
-  it("strips a leading 'how do I'", () => {
-    assert.strictEqual(topicFallback("How do I configure the cache?"), "configure the cache");
+  it("includes the original 'I've got a question'", () => {
+    assert.ok(QUESTION_CUES.includes("I've got a question"));
   });
 
-  it("strips a leading 'what'", () => {
-    assert.strictEqual(topicFallback("What database should we pick?"), "database should we pick");
+  it("contains only non-empty strings", () => {
+    for (const cue of QUESTION_CUES) {
+      assert.ok(cue.length > 0, `Empty cue in pool`);
+    }
+  });
+});
+
+describe("pickQuestionCue", () => {
+  it("returns a string from QUESTION_CUES", () => {
+    const cue = pickQuestionCue();
+    assert.ok(QUESTION_CUES.includes(cue as typeof QUESTION_CUES[number]), `Unexpected cue: "${cue}"`);
   });
 
-  it("leaves a plain topic untouched", () => {
-    assert.strictEqual(topicFallback("Postgres versus MySQL"), "Postgres versus MySQL");
+  it("returns different values over many calls", () => {
+    const results = new Set(Array.from({ length: 100 }, () => pickQuestionCue()));
+    // With 7 cues and 100 random picks, we should see at least 4 distinct values
+    // (statistically guaranteed — chance of seeing <4 is astronomically low)
+    assert.ok(results.size >= 4, `Only saw ${results.size} distinct cues out of 100 picks`);
   });
 
-  it("caps the result at six words", () => {
-    const r = topicFallback("one two three four five six seven eight");
-    assert.strictEqual(r.split(" ").length, 6);
+  it("sometimes picks each cue over a large sample", () => {
+    const counts: Record<string, number> = {};
+    for (let i = 0; i < 1000; i++) {
+      const cue = pickQuestionCue();
+      counts[cue] = (counts[cue] ?? 0) + 1;
+    }
+    // Each of the 7 cues should appear at least once in 1000 draws
+    for (const cue of QUESTION_CUES) {
+      assert.ok(
+        (counts[cue] ?? 0) > 0,
+        `Cue "${cue}" never picked in 1000 draws`,
+      );
+    }
+  });
+});
+
+describe("OUTCOME_CUES", () => {
+  it("contains 7 phrases", () => {
+    assert.strictEqual(OUTCOME_CUES.length, 7);
   });
 
-  it("falls back to the raw question when stripping empties it", () => {
-    assert.strictEqual(topicFallback("Should I?"), "Should I");
+  it("contains only non-empty strings", () => {
+    for (const cue of OUTCOME_CUES) {
+      assert.ok(cue.length > 0, `Empty cue in pool`);
+    }
+  });
+});
+
+describe("pickOutcomeCue", () => {
+  it("returns a string from OUTCOME_CUES", () => {
+    const cue = pickOutcomeCue();
+    assert.ok(OUTCOME_CUES.includes(cue as typeof OUTCOME_CUES[number]), `Unexpected cue: "${cue}"`);
+  });
+
+  it("returns different values over many calls", () => {
+    const results = new Set(Array.from({ length: 100 }, () => pickOutcomeCue()));
+    assert.ok(results.size >= 4, `Only saw ${results.size} distinct cues out of 100 picks`);
+  });
+
+  it("sometimes picks each cue over a large sample", () => {
+    const counts: Record<string, number> = {};
+    for (let i = 0; i < 1000; i++) {
+      const cue = pickOutcomeCue();
+      counts[cue] = (counts[cue] ?? 0) + 1;
+    }
+    for (const cue of OUTCOME_CUES) {
+      assert.ok(
+        (counts[cue] ?? 0) > 0,
+        `Cue "${cue}" never picked in 1000 draws`,
+      );
+    }
+  });
+});
+
+describe("pickFromPool", () => {
+  it("returns a value from the supplied pool", () => {
+    const pool = ["a", "b", "c"] as const;
+    const picked = pickFromPool(pool);
+    assert.ok(pool.includes(picked as (typeof pool)[number]), `Picked "${picked}" not in pool`);
+  });
+
+  it("preserves the pool's element type as the return type", () => {
+    // If the generic isn't tight, this assignment would error.
+    const pool = ["x", "y"] as const;
+    const picked: "x" | "y" = pickFromPool(pool);
+    assert.ok(picked === "x" || picked === "y");
+  });
+
+  it("works with any-element pools (numeric)", () => {
+    const pool = [1, 2, 3] as const;
+    const picked: 1 | 2 | 3 = pickFromPool(pool);
+    assert.ok(picked === 1 || picked === 2 || picked === 3);
+  });
+
+  it("picks values from the same pool over many calls", () => {
+    const pool = ["alpha", "beta", "gamma", "delta"] as const;
+    const seen = new Set<string>();
+    for (let i = 0; i < 200; i++) seen.add(pickFromPool(pool));
+    // With 4 elements and 200 draws, all 4 should show up.
+    assert.strictEqual(seen.size, pool.length);
   });
 });

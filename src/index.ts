@@ -10,7 +10,7 @@ import {
   speak,
   stopSpeaking,
 } from "./tts.js";
-import { shortPhrase, stripCatchphrase } from "./text.js";
+import { pickOutcomeCue, pickQuestionCue, stripCatchphrase } from "./text.js";
 import {
   cancelRecording,
   DEFAULT_RECORDER,
@@ -42,7 +42,13 @@ async function loadConfig(): Promise<void> {
   try {
     const raw = await readFile(CONFIG_PATH, "utf8");
     const cfg = JSON.parse(raw);
-    if (cfg.speaker) Object.assign(speaker, cfg.speaker);
+    if (cfg.speaker) {
+      // Whitelist known keys so stale fields (summaryModel, shortReplyChars)
+      // never creep back into the saved config.
+      if (cfg.speaker.mode) speaker.mode = cfg.speaker.mode;
+      if (cfg.speaker.voice) speaker.voice = cfg.speaker.voice;
+      if (typeof cfg.speaker.rate === "number") speaker.rate = cfg.speaker.rate;
+    }
     if (cfg.recorder) Object.assign(recorder, cfg.recorder);
     if (cfg.transcriber) Object.assign(transcriber, cfg.transcriber);
     if (cfg.dictation) Object.assign(dictation, cfg.dictation);
@@ -82,25 +88,22 @@ function lastAssistantText(entries: any[] | undefined): string {
 
 let lastSpoken = "";
 
-/** Pick a random predefined cue phrase to announce turn completion. */
-function randomCue(): string {
-  const cues = speaker.cues?.length ? speaker.cues : DEFAULT_SPEAKER.cues;
-  return cues[Math.floor(Math.random() * cues.length)];
-}
-
-/** Speak a fixed cue for an `ask_user` prompt without making another LLM call. */
+/** Speak a randomly-picked cue for an `ask_user` prompt without making another LLM call. */
 async function announceQuestion(ctx: ExtensionContext): Promise<void> {
-  await speak("I've got a question", speaker, { force: true, maxChars: 100 }).catch((err) =>
+  await speak(pickQuestionCue(), speaker, { force: true, maxChars: 100 }).catch((err) =>
     ctx.ui?.notify?.(`voice TTS failed: ${err.message}`, "error"),
   );
 }
 
 export default function (pi: ExtensionAPI) {
-  // ---- OUTBOUND: speak a short summary of the outcome each turn -----------
+  // ---- OUTBOUND: speak a random attention-getting phrase after each turn ---
   // Use agent_settled (not agent_end) because agent_end fires on every low-level
   // run, including retries/compaction. agent_settled fires only when Pi won't
-  // continue automatically.
+  // continue automatically. In "full" mode we speak the reply verbatim; in
+  // "cue" mode we pick a random phrase from the static OUTCOME_CUES pool.
   pi.on("agent_settled", async (_event, ctx) => {
+    if (speaker.mode === "off") return;
+
     const text = lastAssistantText(ctx.sessionManager.getBranch());
     if (!text || text === lastSpoken) return;
 
@@ -109,15 +112,12 @@ export default function (pi: ExtensionAPI) {
     if (speaker.mode === "full") {
       phrase = text;
       cap = 500;
-    } else if (speaker.mode === "cue") {
-      phrase = shortPhrase(text, 5);
-      cap = 40;
-      if (text.length > speaker.shortReplyChars) {
-        // Announce completion with a random predefined cue — instant, no model call.
-        phrase = randomCue();
-      }
     } else {
-      return; // off
+      // "cue" — pick a random attention-getting phrase from the static pool.
+      // No LLM call: the cue is a pure notification that the agent's turn
+      // has settled; the user reads the outcome from the terminal.
+      phrase = pickOutcomeCue();
+      cap = 40;
     }
 
     // Only update lastSpoken when we're actually going to speak.
@@ -248,14 +248,13 @@ export default function (pi: ExtensionAPI) {
         `Feedback mode (now: ${speaker.mode})`,
         `TTS voice (now: ${speaker.voice})`,
         `Send catchphrase (now: ${dictation.catchphrase || "off"})`,
-        `Cue phrases (now: ${speaker.cues?.length ?? 0})`,
         `STT backend (now: ${transcriber.kind})`,
       ]);
       if (!choice) return;
       if (choice.startsWith("Feedback mode")) {
         const mode = await ctx.ui.select(
           "Feedback mode",
-          ["cue — one short phrase on completion", "full — speak the answer", "off — silent"],
+          ["cue — one short attention phrase", "full — speak the answer", "off — silent"],
         );
         if (mode?.startsWith("cue")) speaker.mode = "cue";
         else if (mode?.startsWith("full")) speaker.mode = "full";
@@ -280,14 +279,6 @@ export default function (pi: ExtensionAPI) {
           "info",
         );
         return;
-      } else if (choice.startsWith("Cue phrases")) {
-        const v = await ctx.ui.input(
-          "Completion cue phrases (comma-separated, spoken at random when a long reply finishes)",
-          (speaker.cues ?? DEFAULT_SPEAKER.cues).join(", "),
-        );
-        if (v === undefined) return;
-        const cues = v.split(",").map((s) => s.trim()).filter(Boolean);
-        speaker.cues = cues.length ? cues : [...DEFAULT_SPEAKER.cues];
       } else if (choice.startsWith("STT backend")) {
         const kind = await ctx.ui.select("STT backend", [
           "whisper-cli (local whisper.cpp)",
