@@ -7,7 +7,7 @@ export type Voice = string;
 
 /**
  * How much the agent "says" when it finishes a turn:
- * - "cue"  : a single short phrase summarizing the outcome (default)
+ * - "cue"  : a random attention-getting phrase from a static pool (default)
  * - "full" : the assistant's final text (truncated)
  * - "off"  : silent
  */
@@ -17,17 +17,12 @@ export interface Speaker {
   mode: FeedbackMode;
   voice: Voice;
   rate: number; // words per minute for `say`
-  /** Optional "provider/model" id to use for summarizing; defaults to the active model. */
-  summaryModel?: string;
-  /** If a reply is shorter than this many chars, speak it directly without summarizing. */
-  shortReplyChars: number;
 }
 
 export const DEFAULT_SPEAKER: Speaker = {
   mode: "cue",
   voice: "Samantha",
   rate: 190,
-  shortReplyChars: 60,
 };
 
 import type { ChildProcess } from "node:child_process";

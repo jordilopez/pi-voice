@@ -1,14 +1,6 @@
 // Pure text helpers shared by the extension and its tests.
 // No pi/runtime dependencies — safe to unit test in isolation.
 
-/** Trim `text` to at most `maxWords` words at a word boundary. */
-export function shortPhrase(text: string, maxWords = 5): string {
-  const plain = text.replace(/\s+/g, " ").trim();
-  const words = plain.split(" ");
-  if (words.length <= maxWords) return plain;
-  return words.slice(0, maxWords).join(" ");
-}
-
 /**
  * If `text` ends with `catchphrase` (as its own trailing word), strip it and
  * return the remainder. Returns `{ matched: false }` when it doesn't end with
@@ -51,22 +43,6 @@ export function sanitize(text: string): string {
     .trim();
 }
 
-/**
- * Heuristic fallback topic for a question when no model summary is available:
- * strips leading interrogatives and trailing punctuation so "Should I use
- * Postgres or MySQL?" becomes "use Postgres or MySQL".
- */
-export function topicFallback(question: string): string {
-  const base = question.replace(/[?!.\s]+$/g, "").trim();
-  const cleaned = base
-    .replace(
-      /^(should (i|we)|do (you|we)|can (you|we)|how (do|should) (i|we)|what|which|where|when|why|is it|are we)\b[,\s]*/i,
-      "",
-    )
-    .trim();
-  return shortPhrase(cleaned || base || question.trim(), 6);
-}
-
 // ---- Question announcement cue pool ------------------------------------------
 
 /**
@@ -83,7 +59,38 @@ export const QUESTION_CUES = [
   "Ping!",
 ] as const satisfies readonly string[];
 
+export type QuestionCue = (typeof QUESTION_CUES)[number];
+
+/** Pick a random element from a pool. The return type mirrors the pool's element type. */
+export function pickFromPool<T>(pool: readonly T[]): T {
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 /** Pick a random question cue from the pool. */
-export function pickQuestionCue(): string {
-  return QUESTION_CUES[Math.floor(Math.random() * QUESTION_CUES.length)];
+export function pickQuestionCue(): QuestionCue {
+  return pickFromPool(QUESTION_CUES);
+}
+
+// ---- Outcome announcement cue pool ------------------------------------------
+
+/**
+ * Attention-getting phrases said when an agent turn has settled.
+ * Pure attention-cue; does not summarise the outcome — the user reads that
+ * from the terminal. Picked randomly so consecutive turns don't repeat.
+ */
+export const OUTCOME_CUES = [
+  "I'm done",
+  "Ready for you",
+  "That's it",
+  "Back to you",
+  "All done",
+  "Your turn",
+  "Finished",
+] as const satisfies readonly string[];
+
+export type OutcomeCue = (typeof OUTCOME_CUES)[number];
+
+/** Pick a random outcome cue from the pool. */
+export function pickOutcomeCue(): OutcomeCue {
+  return pickFromPool(OUTCOME_CUES);
 }

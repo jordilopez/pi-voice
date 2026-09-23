@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { uuidv7 } from "@earendil-works/pi-ai";
 import { Key } from "@earendil-works/pi-tui";
 import { stat, unlink, readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -11,7 +10,7 @@ import {
   speak,
   stopSpeaking,
 } from "./tts.js";
-import { pickQuestionCue, shortPhrase, stripCatchphrase } from "./text.js";
+import { pickOutcomeCue, pickQuestionCue, stripCatchphrase } from "./text.js";
 import {
   cancelRecording,
   DEFAULT_RECORDER,
@@ -26,9 +25,6 @@ import {
 } from "./stt.js";
 
 // ---- in-memory config (toggle with /voice-config) --------------------------
-// Used only when the user has not selected an explicit summary model. If this
-// model is unavailable or unauthenticated, summaries fall back to the active model.
-const DEFAULT_SUMMARY_MODEL = "hyper/glm-5.3-flash";
 const speaker: Speaker = { ...DEFAULT_SPEAKER };
 const recorder: Recorder = { ...DEFAULT_RECORDER };
 const transcriber: Transcriber = { ...DEFAULT_TRANSCRIBER };
@@ -46,7 +42,13 @@ async function loadConfig(): Promise<void> {
   try {
     const raw = await readFile(CONFIG_PATH, "utf8");
     const cfg = JSON.parse(raw);
-    if (cfg.speaker) Object.assign(speaker, cfg.speaker);
+    if (cfg.speaker) {
+      // Whitelist known keys so stale fields (summaryModel, shortReplyChars)
+      // never creep back into the saved config.
+      if (cfg.speaker.mode) speaker.mode = cfg.speaker.mode;
+      if (cfg.speaker.voice) speaker.voice = cfg.speaker.voice;
+      if (typeof cfg.speaker.rate === "number") speaker.rate = cfg.speaker.rate;
+    }
     if (cfg.recorder) Object.assign(recorder, cfg.recorder);
     if (cfg.transcriber) Object.assign(transcriber, cfg.transcriber);
     if (cfg.dictation) Object.assign(dictation, cfg.dictation);
@@ -86,69 +88,6 @@ function lastAssistantText(entries: any[] | undefined): string {
 
 let lastSpoken = "";
 
-/** Resolve the model to use for summarization (optional cheaper model, else active). */
-function pickSummaryModel(ctx: ExtensionContext) {
-  const reg = ctx?.modelRegistry;
-  if (!reg) return null;
-  const configured =
-    typeof speaker.summaryModel === "string" && speaker.summaryModel.includes("/")
-      ? speaker.summaryModel
-      : DEFAULT_SUMMARY_MODEL;
-  const [provider, id] = configured.split("/", 2);
-  const preferred = reg.find(provider, id);
-  if (preferred && (!reg.hasConfiguredAuth || reg.hasConfiguredAuth(preferred))) {
-    return preferred;
-  }
-  return ctx.model ?? null;
-}
-
-
-/**
- * Ask the model to condense `text` into a short spoken phrase using the given
- * instruction. Returns null on any failure so the caller can fall back.
- */
-async function condenseToPhrase(
-  ctx: ExtensionContext,
-  text: string,
-  instruction: string,
-  maxWords = 5,
-): Promise<string | null> {
-  const model = pickSummaryModel(ctx);
-  if (!model) return null;
-  if (ctx.modelRegistry.hasConfiguredAuth && !ctx.modelRegistry.hasConfiguredAuth(model)) {
-    return null;
-  }
-  const prompt = [instruction, "Output ONLY the words — nothing else.", "", "<text>", text.slice(0, 4000), "</text>"].join("\n");
-  const messages = [
-    { role: "user" as const, content: [{ type: "text" as const, text: prompt }], timestamp: Date.now() },
-  ];
-  const resp = await ctx.modelRegistry.complete(model, { messages }, {
-    cacheRetention: "none",
-    sessionId: uuidv7(),
-  });
-  const phrase = resp.content
-    .filter((c: any) => c.type === "text")
-    .map((c: any) => c.text)
-    .join(" ")
-    .replace(/^[\s"']+|[\s"']+\.?$/g, "")
-    .trim();
-  return phrase ? shortPhrase(phrase, maxWords) : null;
-}
-
-/** Condense the assistant's reply into a 3–5 word outcome headline. */
-function summarizeToPhrase(ctx: ExtensionContext, text: string): Promise<string | null> {
-  return condenseToPhrase(
-    ctx,
-    text,
-    [
-      "Condense the assistant's reply below into a HEADLINE of 3 to 5 words max.",
-      "It should convey the outcome so the user notices when they look back.",
-      "No quotes, no ending punctuation, no articles (a/an/the).",
-    ].join("\n"),
-    5,
-  );
-}
-
 /** Speak a randomly-picked cue for an `ask_user` prompt without making another LLM call. */
 async function announceQuestion(ctx: ExtensionContext): Promise<void> {
   await speak(pickQuestionCue(), speaker, { force: true, maxChars: 100 }).catch((err) =>
@@ -157,11 +96,14 @@ async function announceQuestion(ctx: ExtensionContext): Promise<void> {
 }
 
 export default function (pi: ExtensionAPI) {
-  // ---- OUTBOUND: speak a short summary of the outcome each turn -----------
+  // ---- OUTBOUND: speak a random attention-getting phrase after each turn ---
   // Use agent_settled (not agent_end) because agent_end fires on every low-level
   // run, including retries/compaction. agent_settled fires only when Pi won't
-  // continue automatically.
+  // continue automatically. In "full" mode we speak the reply verbatim; in
+  // "cue" mode we pick a random phrase from the static OUTCOME_CUES pool.
   pi.on("agent_settled", async (_event, ctx) => {
+    if (speaker.mode === "off") return;
+
     const text = lastAssistantText(ctx.sessionManager.getBranch());
     if (!text || text === lastSpoken) return;
 
@@ -170,17 +112,12 @@ export default function (pi: ExtensionAPI) {
     if (speaker.mode === "full") {
       phrase = text;
       cap = 500;
-    } else if (speaker.mode === "cue") {
-      phrase = shortPhrase(text, 5);
-      cap = 40;
-      if (text.length > speaker.shortReplyChars) {
-        phrase = shortPhrase(
-          (await summarizeToPhrase(ctx, text).catch(() => null)) ?? phrase,
-          5,
-        );
-      }
     } else {
-      return; // off
+      // "cue" — pick a random attention-getting phrase from the static pool.
+      // No LLM call: the cue is a pure notification that the agent's turn
+      // has settled; the user reads the outcome from the terminal.
+      phrase = pickOutcomeCue();
+      cap = 40;
     }
 
     // Only update lastSpoken when we're actually going to speak.
@@ -311,14 +248,13 @@ export default function (pi: ExtensionAPI) {
         `Feedback mode (now: ${speaker.mode})`,
         `TTS voice (now: ${speaker.voice})`,
         `Send catchphrase (now: ${dictation.catchphrase || "off"})`,
-        `Summary model (now: ${speaker.summaryModel ?? "active"})`,
         `STT backend (now: ${transcriber.kind})`,
       ]);
       if (!choice) return;
       if (choice.startsWith("Feedback mode")) {
         const mode = await ctx.ui.select(
           "Feedback mode",
-          ["cue — one short summary phrase", "full — speak the answer", "off — silent"],
+          ["cue — one short attention phrase", "full — speak the answer", "off — silent"],
         );
         if (mode?.startsWith("cue")) speaker.mode = "cue";
         else if (mode?.startsWith("full")) speaker.mode = "full";
@@ -343,13 +279,6 @@ export default function (pi: ExtensionAPI) {
           "info",
         );
         return;
-      } else if (choice.startsWith("Summary model")) {
-        const v = await ctx.ui.input(
-          "Summary model (provider/model, blank = active model)",
-          speaker.summaryModel ?? "",
-        );
-        if (v === undefined) return;
-        speaker.summaryModel = v.trim() || undefined;
       } else if (choice.startsWith("STT backend")) {
         const kind = await ctx.ui.select("STT backend", [
           "whisper-cli (local whisper.cpp)",
