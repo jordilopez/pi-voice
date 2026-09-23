@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 
-import { sanitize, shortPhrase, stripCatchphrase, topicFallback } from "./text.ts";
+import { QUESTION_CUES, sanitize, shortPhrase, stripCatchphrase, pickQuestionCue, topicFallback } from "./text.ts";
 
 describe("stripCatchphrase", () => {
   it("matches trailing catchphrase after a comma", () => {
@@ -124,5 +124,50 @@ describe("topicFallback", () => {
 
   it("falls back to the raw question when stripping empties it", () => {
     assert.strictEqual(topicFallback("Should I?"), "Should I");
+  });
+});
+
+describe("QUESTION_CUES", () => {
+  it("contains 7 phrases", () => {
+    assert.strictEqual(QUESTION_CUES.length, 7);
+  });
+
+  it("includes the original 'I've got a question'", () => {
+    assert.ok(QUESTION_CUES.includes("I've got a question"));
+  });
+
+  it("contains only non-empty strings", () => {
+    for (const cue of QUESTION_CUES) {
+      assert.ok(cue.length > 0, `Empty cue in pool`);
+    }
+  });
+});
+
+describe("pickQuestionCue", () => {
+  it("returns a string from QUESTION_CUES", () => {
+    const cue = pickQuestionCue();
+    assert.ok(QUESTION_CUES.includes(cue as typeof QUESTION_CUES[number]), `Unexpected cue: "${cue}"`);
+  });
+
+  it("returns different values over many calls", () => {
+    const results = new Set(Array.from({ length: 100 }, () => pickQuestionCue()));
+    // With 7 cues and 100 random picks, we should see at least 4 distinct values
+    // (statistically guaranteed — chance of seeing <4 is astronomically low)
+    assert.ok(results.size >= 4, `Only saw ${results.size} distinct cues out of 100 picks`);
+  });
+
+  it("sometimes picks each cue over a large sample", () => {
+    const counts: Record<string, number> = {};
+    for (let i = 0; i < 1000; i++) {
+      const cue = pickQuestionCue();
+      counts[cue] = (counts[cue] ?? 0) + 1;
+    }
+    // Each of the 7 cues should appear at least once in 1000 draws
+    for (const cue of QUESTION_CUES) {
+      assert.ok(
+        (counts[cue] ?? 0) > 0,
+        `Cue "${cue}" never picked in 1000 draws`,
+      );
+    }
   });
 });

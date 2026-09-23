@@ -66,3 +66,24 @@ export function topicFallback(question: string): string {
     .trim();
   return shortPhrase(cleaned || base || question.trim(), 6);
 }
+
+// ---- Question announcement cue pool ------------------------------------------
+
+/**
+ * Attention-getting phrases for `ask_user` announcements.
+ * A random one is picked each time to avoid monotony.
+ */
+export const QUESTION_CUES = [
+  "I've got a question",
+  "A question for you",
+  "Hey, I need your input",
+  "Your attention please",
+  "Question incoming",
+  "Quick question",
+  "Ping!",
+] as const satisfies readonly string[];
+
+/** Pick a random question cue from the pool. */
+export function pickQuestionCue(): string {
+  return QUESTION_CUES[Math.floor(Math.random() * QUESTION_CUES.length)];
+}

@@ -11,7 +11,7 @@ import {
   speak,
   stopSpeaking,
 } from "./tts.js";
-import { shortPhrase, stripCatchphrase } from "./text.js";
+import { pickQuestionCue, shortPhrase, stripCatchphrase } from "./text.js";
 import {
   cancelRecording,
   DEFAULT_RECORDER,
@@ -149,9 +149,9 @@ function summarizeToPhrase(ctx: ExtensionContext, text: string): Promise<string 
   );
 }
 
-/** Speak a fixed cue for an `ask_user` prompt without making another LLM call. */
+/** Speak a randomly-picked cue for an `ask_user` prompt without making another LLM call. */
 async function announceQuestion(ctx: ExtensionContext): Promise<void> {
-  await speak("I've got a question", speaker, { force: true, maxChars: 100 }).catch((err) =>
+  await speak(pickQuestionCue(), speaker, { force: true, maxChars: 100 }).catch((err) =>
     ctx.ui?.notify?.(`voice TTS failed: ${err.message}`, "error"),
   );
 }
