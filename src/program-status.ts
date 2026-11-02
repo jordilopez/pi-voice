@@ -1,4 +1,4 @@
-// OSC 7501 program-status reports for terminal hosts (Herdr and friends).
+// OSC 7501 program-status reports for Herdr.
 // Pure formatters + guards only — the extension writes the returned strings to
 // process.stdout. See README for the protocol.
 
@@ -49,9 +49,44 @@ export function formatClear(): string {
 }
 
 /**
- * Only write program status into a real terminal attached to the TUI.
- * Never emit escapes into print/json/rpc output or a redirected stdout.
+ * Herdr injects these into every pane. Either one is enough; both missing
+ * means this is some other terminal and the sequence must not be written.
  */
-export function shouldReport(mode: ProgramStatusMode, isTTY: boolean): boolean {
-  return mode === "tui" && isTTY;
+export function isHerdrHost(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return Boolean(env.HC_TERMINAL_ID || env.HC_TERMINAL_SOCKET);
 }
+
+/**
+ * Only write program status into a Herdr TTY attached to the TUI.
+ * Never emit escapes into print/json/rpc output, a redirected stdout, or a
+ * terminal that will not consume OSC 7501.
+ */
+export function shouldReport(
+  mode: ProgramStatusMode,
+  isTTY: boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return mode === "tui" && isTTY && isHerdrHost(env);
+}
+
+/**
+ * Write a status sequence. A missing or closed stdout must not fail the
+ * ask_user flow — the badge is best-effort. The error callback keeps a closed
+ * pipe from surfacing as an unhandled stream error.
+ */
+export function writeStatus(
+  sequence: string,
+  write: (
+    chunk: string,
+    onError?: (err?: Error | null) => void,
+  ) => boolean = (chunk, onError) => process.stdout.write(chunk, onError),
+): void {
+  try {
+    write(sequence, () => {});
+  } catch {
+    // Host went away, or stdout is not writable. Drop the badge.
+  }
+}
+

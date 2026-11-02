@@ -88,11 +88,13 @@ the extension.
 
 ### Terminal status (OSC 7501)
 While an `ask_user` dialog is open, pi-voice also reports the session as
-**blocked** (`state=blocked:app=pi:kind=question`) so Herdr and other OSC 7501
-hosts show a needs-you badge. The badge clears (`state=idle`) when the dialog is
+**blocked** (`state=blocked:app=pi:kind=question`) so Herdr shows a needs-you
+badge. The badge clears (`state=idle`) when the dialog is
 answered, cancelled, or errors, and on session shutdown. This is independent of
 the feedback mode — muting voice does not suppress the badge. Status writes only
-happen in interactive TUI mode with a real TTY, never in print/JSON/RPC output.
+happen inside a Herdr pane (`HC_TERMINAL_ID` or `HC_TERMINAL_SOCKET` set), in
+interactive TUI mode, on a real TTY. Outside Herdr the write is skipped, and a
+failed write is ignored so the prompt still appears.
 
 ### Send catchphrase
 By default the trigger word is **"copy"**. Say your phrase and finish with it:
