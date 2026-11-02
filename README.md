@@ -86,6 +86,14 @@ the extension.
 - **Turn finished:** a short model-generated headline of the outcome, e.g. *"voice feedback now working"*.
 - **`ask_user` prompt raised:** says *"I've got a question"*. This is a fixed cue, so it does not make an additional model call or delay the prompt.
 
+### Terminal status (OSC 7501)
+While an `ask_user` dialog is open, pi-voice also reports the session as
+**blocked** (`state=blocked:app=pi:kind=question`) so Herdr and other OSC 7501
+hosts show a needs-you badge. The badge clears (`state=idle`) when the dialog is
+answered, cancelled, or errors, and on session shutdown. This is independent of
+the feedback mode — muting voice does not suppress the badge. Status writes only
+happen in interactive TUI mode with a real TTY, never in print/JSON/RPC output.
+
 ### Send catchphrase
 By default the trigger word is **"copy"**. Say your phrase and finish with it:
 > "run the test suite for me, *copy*" → sent immediately as: *run the test suite for me*
@@ -99,10 +107,11 @@ src/index.ts   extension entry: events, shortcut, commands
 src/tts.ts     macOS `say` speech synthesis (cancellable)
 src/stt.ts     ffmpeg AVFoundation capture + pluggable transcription
 src/text.ts    pure text helpers (phrase truncation, catchphrase, sanitize)
+src/program-status.ts  pure OSC 7501 formatters (blocked/idle) + TTY guard
 ```
 
 - Outbound: `agent_settled` (not `agent_end`, which can fire more than once per turn) → in `cue` mode the model condenses the reply into one attention phrase (falls back to a few words if the model call is unavailable); short replies are spoken as-is; `full` mode speaks the truncated text.
-- Questions: a `tool_call` for `ask_user` announces the fixed *"I've got a question"* cue asynchronously, without an LLM call.
+- Questions: a `tool_call` for `ask_user` announces the fixed *"I've got a question"* cue asynchronously, without an LLM call, and writes an OSC 7501 blocked status; the matching `tool_result` clears it.
 - Inbound: `Key.ctrlShift("v")` toggles a spawned `ffmpeg` recording; on stop it transcribes via whisper.cpp. If the transcript ends with `dictation.catchphrase` (default "copy"), the word is stripped and `pi.sendUserMessage()` sends it to the model; otherwise `ctx.ui.setEditorText()` drops it in the editor.
 
 ## Configuration

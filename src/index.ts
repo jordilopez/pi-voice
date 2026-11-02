@@ -12,6 +12,12 @@ import {
 } from "./tts.js";
 import { pickOutcomeCue, pickQuestionCue, stripCatchphrase } from "./text.js";
 import {
+  DEFAULT_BLOCKED_MESSAGE,
+  formatBlocked,
+  formatClear,
+  shouldReport,
+} from "./program-status.js";
+import {
   cancelRecording,
   DEFAULT_RECORDER,
   DEFAULT_TRANSCRIBER,
@@ -96,6 +102,35 @@ async function announceQuestion(ctx: ExtensionContext): Promise<void> {
 }
 
 export default function (pi: ExtensionAPI) {
+  // ---- OUTBOUND: report `ask_user` as blocked (OSC 7501) -------------------
+  // Herdr (and other OSC 7501 hosts) show a needs-you badge from this. Pi's
+  // own setBlocked path does not cover pi-ask-user, which renders via
+  // ui.custom({ overlay: true }), so we write the sequence ourselves.
+  // Track in-flight ids so a clear never fires for an unrelated tool result.
+  const blockedAsks = new Set<string>();
+
+  function canReportStatus(ctx: ExtensionContext): boolean {
+    return shouldReport(ctx.mode, process.stdout.isTTY === true);
+  }
+
+  function reportBlocked(ctx: ExtensionContext, toolCallId: string): void {
+    if (!canReportStatus(ctx)) return;
+    blockedAsks.add(toolCallId);
+    process.stdout.write(formatBlocked(DEFAULT_BLOCKED_MESSAGE));
+  }
+
+  function reportClear(ctx: ExtensionContext, toolCallId?: string): void {
+    if (toolCallId !== undefined) {
+      if (!blockedAsks.delete(toolCallId)) return;
+    } else if (blockedAsks.size === 0) {
+      return;
+    } else {
+      blockedAsks.clear();
+    }
+    if (!canReportStatus(ctx)) return;
+    process.stdout.write(formatClear());
+  }
+
   // ---- OUTBOUND: speak a random attention-getting phrase after each turn ---
   // Use agent_settled (not agent_end) because agent_end fires on every low-level
   // run, including retries/compaction. agent_settled fires only when Pi won't
@@ -135,9 +170,20 @@ export default function (pi: ExtensionAPI) {
   // When the agent asks the user something, announce the topic immediately.
   // Don't await the model round-trip here: the ask_user prompt should appear
   // without waiting on summarization. The speech catches up on its own.
+  // The blocked status is independent of the speaker mode — muting voice must
+  // not suppress the badge.
   pi.on("tool_call", async (event, ctx) => {
-    if (event.toolName !== "ask_user" || speaker.mode === "off") return;
-    void announceQuestion(ctx);
+    if (event.toolName !== "ask_user") return;
+    reportBlocked(ctx, event.toolCallId);
+    if (speaker.mode !== "off") void announceQuestion(ctx);
+  });
+
+  // Clear on normal answers, cancels (Esc/Ctrl+C), and error paths —
+  // tool_result fires for all of them. An uncleared status would stick until
+  // Pi next calls setProgramStatus.
+  pi.on("tool_result", async (event, ctx) => {
+    if (event.toolName !== "ask_user") return;
+    reportClear(ctx, event.toolCallId);
   });
 
   // ---- INBOUND: push-to-talk dictation -------------------------------------
@@ -316,9 +362,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Clean up any mic/voice process on shutdown and persist config.
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (_event, ctx) => {
     stopSpeaking();
     cancelRecording();
+    reportClear(ctx);
     await saveConfig();
   });
 }
