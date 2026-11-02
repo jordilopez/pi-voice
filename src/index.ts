@@ -12,10 +12,10 @@ import {
 } from "./tts.js";
 import { pickOutcomeCue, pickQuestionCue, stripCatchphrase } from "./text.js";
 import {
-  DEFAULT_BLOCKED_MESSAGE,
   formatBlocked,
   formatClear,
   shouldReport,
+  writeStatus,
 } from "./program-status.js";
 import {
   cancelRecording,
@@ -103,9 +103,9 @@ async function announceQuestion(ctx: ExtensionContext): Promise<void> {
 
 export default function (pi: ExtensionAPI) {
   // ---- OUTBOUND: report `ask_user` as blocked (OSC 7501) -------------------
-  // Herdr (and other OSC 7501 hosts) show a needs-you badge from this. Pi's
-  // own setBlocked path does not cover pi-ask-user, which renders via
-  // ui.custom({ overlay: true }), so we write the sequence ourselves.
+  // Herdr shows a needs-you badge from this. Pi's own setBlocked path does
+  // not cover pi-ask-user, which renders via ui.custom({ overlay: true }), so
+  // we write the sequence ourselves. Skipped entirely outside Herdr.
   // Track in-flight ids so a clear never fires for an unrelated tool result.
   const blockedAsks = new Set<string>();
 
@@ -116,7 +116,7 @@ export default function (pi: ExtensionAPI) {
   function reportBlocked(ctx: ExtensionContext, toolCallId: string): void {
     if (!canReportStatus(ctx)) return;
     blockedAsks.add(toolCallId);
-    process.stdout.write(formatBlocked(DEFAULT_BLOCKED_MESSAGE));
+    writeStatus(formatBlocked());
   }
 
   function reportClear(ctx: ExtensionContext, toolCallId?: string): void {
@@ -128,7 +128,7 @@ export default function (pi: ExtensionAPI) {
       blockedAsks.clear();
     }
     if (!canReportStatus(ctx)) return;
-    process.stdout.write(formatClear());
+    writeStatus(formatClear());
   }
 
   // ---- OUTBOUND: speak a random attention-getting phrase after each turn ---

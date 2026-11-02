@@ -7,7 +7,9 @@ import {
   MAX_MESSAGE_BYTES,
   formatBlocked,
   formatClear,
+  isHerdrHost,
   shouldReport,
+  writeStatus,
 } from "./program-status.ts";
 
 const decodeMsg = (seq: string): string => {
@@ -76,12 +78,50 @@ describe("formatClear", () => {
   });
 });
 
-describe("shouldReport", () => {
-  it("reports only in TUI mode on a TTY", () => {
-    assert.strictEqual(shouldReport("tui", true), true);
-    assert.strictEqual(shouldReport("tui", false), false);
-    assert.strictEqual(shouldReport("rpc", true), false);
-    assert.strictEqual(shouldReport("json", true), false);
-    assert.strictEqual(shouldReport("print", true), false);
+const herdrEnv = { HC_TERMINAL_ID: "t1" };
+
+describe("isHerdrHost", () => {
+  it("accepts either Herdr env var", () => {
+    assert.strictEqual(isHerdrHost({ HC_TERMINAL_ID: "t9" }), true);
+    assert.strictEqual(isHerdrHost({ HC_TERMINAL_SOCKET: "/tmp/herdr.sock" }), true);
+  });
+
+  it("rejects a normal terminal", () => {
+    assert.strictEqual(isHerdrHost({}), false);
+    assert.strictEqual(isHerdrHost({ TERM: "xterm-256color" }), false);
   });
 });
+
+describe("shouldReport", () => {
+  it("reports only in TUI mode on a Herdr TTY", () => {
+    assert.strictEqual(shouldReport("tui", true, herdrEnv), true);
+    assert.strictEqual(shouldReport("tui", true, {}), false);
+    assert.strictEqual(shouldReport("tui", false, herdrEnv), false);
+    assert.strictEqual(shouldReport("rpc", true, herdrEnv), false);
+    assert.strictEqual(shouldReport("json", true, herdrEnv), false);
+    assert.strictEqual(shouldReport("print", true, herdrEnv), false);
+  });
+});
+
+describe("writeStatus", () => {
+  it("swallows a synchronous write failure", () => {
+    assert.doesNotThrow(() =>
+      writeStatus("seq", () => {
+        throw new Error("EPIPE");
+      }),
+    );
+  });
+
+  it("passes an error callback that ignores write errors", () => {
+    let onError: ((err?: Error | null) => void) | undefined;
+    assert.doesNotThrow(() =>
+      writeStatus("seq", (_chunk, callback) => {
+        onError = callback;
+        return false;
+      }),
+    );
+    assert.ok(onError);
+    assert.doesNotThrow(() => onError?.(new Error("EPIPE")));
+  });
+});
+
