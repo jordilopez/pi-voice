@@ -28,10 +28,12 @@ supporting them means swapping the TTS and capture backends.
 ```
 index.ts        auto-discovery entry (re-exports src/index.ts)
 src/index.ts    extension factory: events, shortcut, commands
+src/program-status.ts  pure OSC 7501 blocked/idle formatters + TTY guard
 src/tts.ts      macOS `say` speech synthesis (cancellable)
 src/stt.ts      ffmpeg AVFoundation capture + pluggable transcription
 src/text.ts     pure text helpers (shortPhrase, stripCatchphrase, sanitize, topicFallback)
-src/index.test.ts  tests for src/text.ts
+src/index.test.ts      tests for src/text.ts
+src/program-status.test.ts  tests for src/program-status.ts
 ```
 
 ## Working on this project
@@ -40,7 +42,7 @@ Run these before committing:
 
 ```bash
 npm run check                 # tsc --noEmit
-node --test src/index.test.ts # unit tests
+node --test src/*.test.ts   # unit tests
 pi -e ./index.ts              # smoke test: loads without errors
 ```
 
